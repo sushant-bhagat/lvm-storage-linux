@@ -1,0 +1,96 @@
+LVM Storage Linux
+## 🚀 Setup & Usage
+
+### Prerequisites
+- Ubuntu 20.04+ (or any RHEL/Debian-based distro)
+- LVM2 package installed
+- At least one additional raw disk attached (e.g. via VMware)
+
+### Install LVM2
+```bash
+sudo apt update
+sudo apt install lvm2 -y
+```
+
+### Step 1 — Create Physical Volume
+```bash
+# Initialise disk as a physical volume
+sudo pvcreate /dev/sdb
+sudo pvdisplay
+```
+
+### Step 2 — Create Volume Group
+```bash
+# Group physical volumes together
+sudo vgcreate vg_data /dev/sdb
+sudo vgdisplay
+```
+
+### Step 3 — Create Logical Volume
+```bash
+# Carve out a logical volume from the group
+sudo lvcreate -L 10G -n lv_data vg_data
+
+# Format it
+sudo mkfs.ext4 /dev/vg_data/lv_data
+
+# Mount it
+sudo mkdir -p /mnt/data
+sudo mount /dev/vg_data/lv_data /mnt/data
+```
+
+### Step 4 — Extend Volume Online (no downtime!)
+```bash
+# Add 5GB to existing volume while mounted
+sudo lvextend -L +5G /dev/vg_data/lv_data
+sudo resize2fs /dev/vg_data/lv_data
+
+# Verify
+df -h /mnt/data
+```
+
+### Step 5 — Create a Snapshot
+```bash
+sudo lvcreate -L 2G -s -n lv_data_snap /dev/vg_data/lv_data
+sudo lvdisplay /dev/vg_data/lv_data_snap
+```
+
+---
+
+## 📜 Automation Scripts
+
+### Auto-snapshot script (`snapshot.sh`)
+```bash
+#!/bin/bash
+# Automated LVM snapshot — run via cron daily at 2AM
+DATE=$(date +%Y%m%d_%H%M%S)
+SNAP_NAME="lv_data_snap_$DATE"
+VG="vg_data"
+LV="lv_data"
+SNAP_SIZE="2G"
+
+echo "Creating snapshot: $SNAP_NAME"
+sudo lvcreate -L $SNAP_SIZE -s -n $SNAP_NAME /dev/$VG/$LV
+
+if [ $? -eq 0 ]; then
+  echo "Snapshot $SNAP_NAME created successfully at $(date)"
+else
+  echo "ERROR: Snapshot creation failed!" >&2
+  exit 1
+fi
+
+# Keep only last 7 snapshots
+OLD_SNAPS=$(sudo lvs --noheadings -o lv_name $VG | grep "lv_data_snap" | sort | head -n -7)
+for snap in $OLD_SNAPS; do
+  echo "Removing old snapshot: $snap"
+  sudo lvremove -f /dev/$VG/$snap
+done
+```
+
+### Add to cron
+```bash
+crontab -e
+# Add this line:
+0 2 * * * /home/sushant/scripts/snapshot.sh >> /var/log/lvm_snapshot.log 2>&1
+
+
